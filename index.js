@@ -1,114 +1,54 @@
-const Koa = require("koa");
-const app = new Koa();
-const router = require("koa-router")();
-const cors = require("koa-cors");
-const bodyParser = require("koa-bodyparser");
-const low = require("lowdb");
-const FileSync = require("lowdb/adapters/FileSync");
-const { WebClient } = require("@slack/web-api");
-const { routes, processMessage } = require("./features");
-const { prepareRegisterUrl } = require("./features/register");
-const { setupReminders, processIM } = require("./features/reminders");
-const intratime = require("./intratime");
+const { fillAllDay } = require("./intratime");
 
-const oauthToken = process.env.SLACK_TOKEN;
-if(!oauthToken) {
-  console.error("This server needs a slack token set in SLACK_TOKEN env variable");
-  process.exit(1);
+const dates = [
+  "20-12-2019",
+  "23-12-2019",
+  "24-12-2019",
+  "02-01-2020",
+  "03-01-2020",
+  "07-01-2020",
+  "08-01-2020",
+  "09-01-2020",
+  "10-01-2020",
+  "13-01-2020",
+  "14-01-2020",
+  "15-01-2020",
+  "16-01-2020",
+  "17-01-2020",
+  "20-01-2020",
+  "21-01-2020",
+  "22-01-2020",
+  "23-01-2020",
+  "24-01-2020",
+  "27-01-2020",
+  "28-01-2020",
+  "29-01-2020",
+  "30-01-2020",
+  "31-01-2020",
+  "03-02-2020",
+  "04-02-2020",
+  "05-02-2020"
+].map(str => {
+  const [day, month, year] = str.split("-");
+  return new Date(`${year}-${month}-${day}`);
+});
+
+const token = process.env.token;
+async function processDate(idx) {
+  if (idx === dates.length) return;
+  try {
+    await fillAllDay(token, dates[idx]);
+    console.log(`${dates[idx].toJSON()} filled correctly`);
+  } catch (e) {
+    console.log(`Error while processing: ${dates[idx].toJSON()}`);
+    throw e;
+  }
+
+  console.log("waiting 5 mins...");
+  await new Promise(res => setTimeout(res, 300_000));
+  await processDate(idx + 1);
 }
 
-const slackWeb = new WebClient(oauthToken);
-const adapter = new FileSync("db.json");
-const db = low(adapter);
-db.defaults({
-  users: [],
-  tokens: []
-}).write();
-
-setupReminders(db, slackWeb);
-
-router
-  .get("/", async (ctx, next) => {
-    ctx.body = "hello! You shouldn't be here :)";
-  })
-  .post("/", async (ctx, next) => {
-    let body = ctx.request.body;
-    if (body.payload) {
-      body = JSON.parse(body.payload);
-    }
-
-    const { type, challenge, event } = body;
-
-    switch (type) {
-      case "url_verification":
-        ctx.body = challenge;
-        break;
-      case "event_callback":
-        ctx.body = "";
-        processEvent(event);
-        break;
-      case "block_actions":
-        ctx.body = "";
-        processIM(body, db);
-        break;
-      default:
-        console.log(body);
-    }
-  });
-
-routes(router, db, slackWeb);
-
-app
-  .use(cors())
-  .use(bodyParser())
-  .use(router.routes())
-  .use(router.allowedMethods());
-
-app.listen(8001);
-
-async function processEvent(event) {
-  const { text, channel, bot_id, subtype } = event;
-  const insensitiveText = text && text.toLocaleLowerCase();
-  const userId = channel;
-
-  if (bot_id || subtype === "message_changed") {
-    // Ignore messages sent by bots (it could be us!)
-    return;
-  }
-
-  const user = db
-    .get("users")
-    .find({ id: userId })
-    .value();
-
-  if (!user) {
-    const url = prepareRegisterUrl(userId, db);
-
-    return slackWeb.chat.postMessage({
-      text: `It seems like you haven't registered yet. Click here to register: ${url}`,
-      channel
-    });
-  }
-
-  const msg = await processMessage(insensitiveText, user, {
-    db,
-    intratime,
-    postMessage: msg =>
-      slackWeb.chat.postMessage({
-        ...msg,
-        channel
-      })
-  });
-
-  if (msg) {
-    return slackWeb.chat.postMessage({
-      ...msg,
-      channel
-    });
-  } else {
-    return slackWeb.chat.postMessage({
-      text: "Sorry, I didn't get that",
-      channel
-    });
-  }
-}
+processDate(0)
+  .then(() => console.log("all good"))
+  .catch(e => console.error(e.message));
